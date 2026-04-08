@@ -538,6 +538,7 @@ class NotionClient:
             "Budget": {"rich_text": {}},
             "Client": {"rich_text": {}},
             "Posted": {"rich_text": {}},
+            "Description": {"rich_text": {}},
             "Skills": {"multi_select": {"options": [{"name": s, "color": "default"} for s in UpworkParser.SKILL_CANDIDATES]}},
             "Match Score": {"number": {"format": "number"}},
             "Priority": {"select": {"options": [{"name": "高", "color": "red"}, {"name": "中", "color": "yellow"}, {"name": "低", "color": "gray"}]}},
@@ -587,11 +588,18 @@ class NotionClient:
         payload = {"properties": self._record_to_properties(record)}
         return self._request("PATCH", url, json=payload)
 
+    # Notion rich_text: each text object "content" is limited to 2000 characters.
+    _NOTION_RICH_TEXT_MAX = 2000
+
     def _rt(self, text: str) -> List[Dict[str, Any]]:
         text = text or ""
         if not text:
             return []
-        return [{"type": "text", "text": {"content": text[:2000]}}]
+        out: List[Dict[str, Any]] = []
+        step = self._NOTION_RICH_TEXT_MAX
+        for i in range(0, len(text), step):
+            out.append({"type": "text", "text": {"content": text[i : i + step]}})
+        return out
 
     def _record_to_properties(self, record: JobRecord) -> Dict[str, Any]:
         props: Dict[str, Any] = {
@@ -601,6 +609,7 @@ class NotionClient:
             "Budget": {"rich_text": self._rt(record.budget)},
             "Client": {"rich_text": self._rt(record.client_summary)},
             "Posted": {"rich_text": self._rt(record.posted)},
+            "Description": {"rich_text": self._rt(record.description)},
             "Match Score": {"number": record.match_score},
             "Priority": {"select": {"name": record.priority}},
             "Notes": {"rich_text": self._rt(record.notes)},
