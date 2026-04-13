@@ -177,6 +177,9 @@ class JobRecord:
     notes: str = ""
     proposal_seed: str = ""
     client_summary: str = ""
+    video_meeting_detected: bool = False
+    is_quick_win: bool = False
+    proposal_count_floor: Optional[int] = None
 
     def __post_init__(self) -> None:
         if self.skills is None:
@@ -261,10 +264,15 @@ class UpworkParser:
         proposals_el = article.select_one('[data-test="proposals-tier"] strong')
         proposals = clean_text(proposals_el.get_text(" ", strip=True)) if proposals_el else ""
 
+        proposal_count_floor = self._parse_proposal_floor(proposals)
+
         tag_els = article.select('[data-test="TokenClamp JobAttrs"] [data-test="token"]')
         raw_tags = [clean_text(tag.get_text(" ", strip=True)) for tag in tag_els]
         raw_tags = [t for t in raw_tags if t and not t.startswith("+")]
         skills = self._normalize_skills(raw_tags, title, description)
+
+        video_meeting_detected = self._detect_video_meetings(description)
+        is_quick_win = self._check_quick_win(budget, client_rating)
 
         client_summary = self._build_client_summary(payment_verified, client_location, client_rating, client_spent)
         match_score = self._estimate_match_score(title, description, skills, budget, proposals, payment_verified, client_rating, client_spent)
@@ -300,6 +308,9 @@ class UpworkParser:
             notes=notes,
             proposal_seed=proposal_seed,
             client_summary=client_summary,
+            video_meeting_detected=video_meeting_detected,
+            is_quick_win=is_quick_win,
+            proposal_count_floor=proposal_count_floor,
         )
 
     def _absolute_url(self, href: str) -> str:
@@ -345,6 +356,36 @@ class UpworkParser:
                 deduped.append(s)
                 seen.add(s)
         return deduped
+
+    def _detect_video_meetings(self, description: str) -> bool:
+        keywords = [
+            "Zoom", "Call", "Interview", "Meeting", "Video",
+            "Google Meet", "Microsoft Teams", "Talk on the phone",
+        ]
+        return contains_any(description or "", keywords)
+
+    def _check_quick_win(self, budget: str, client_rating: Optional[float]) -> bool:
+        """
+        $1戦略（実績作り）候補:
+        - 予算（Budget）が $50 以下
+        - クライアント評価が 4.8 以上
+        """
+        if client_rating is None:
+            return False
+        budget_num = parse_number_or_none(budget)
+        if budget_num is None:
+            return False
+        return budget_num <= 50 and client_rating >= 4.8
+
+    def _parse_proposal_floor(self, proposals: str) -> Optional[int]:
+        """
+        Examples:
+          - "15 to 20" -> 15
+          - "20 to 50" -> 20
+          - "50+" -> 50
+        """
+        n = parse_number_or_none(proposals)
+        return int(n) if n is not None else None
 
     def _build_client_summary(self, payment_verified: Optional[bool], location: str, rating: Optional[float], spent: str) -> str:
         payment = "Verified" if payment_verified else "Unverified" if payment_verified is False else "Unknown"
@@ -539,6 +580,9 @@ class NotionClient:
             "Client": {"rich_text": {}},
             "Posted": {"rich_text": {}},
             "Description": {"rich_text": {}},
+            "Video Meeting Detected": {"checkbox": {}},
+            "Quick Win Candidate": {"checkbox": {}},
+            "Proposal Floor": {"number": {"format": "number"}},
             "Skills": {"multi_select": {"options": [{"name": s, "color": "default"} for s in UpworkParser.SKILL_CANDIDATES]}},
             "Match Score": {"number": {"format": "number"}},
             "Priority": {"select": {"options": [{"name": "高", "color": "red"}, {"name": "中", "color": "yellow"}, {"name": "低", "color": "gray"}]}},
@@ -610,6 +654,9 @@ class NotionClient:
             "Client": {"rich_text": self._rt(record.client_summary)},
             "Posted": {"rich_text": self._rt(record.posted)},
             "Description": {"rich_text": self._rt(record.description)},
+            "Video Meeting Detected": {"checkbox": record.video_meeting_detected},
+            "Quick Win Candidate": {"checkbox": record.is_quick_win},
+            "Proposal Floor": {"number": record.proposal_count_floor},
             "Match Score": {"number": record.match_score},
             "Priority": {"select": {"name": record.priority}},
             "Notes": {"rich_text": self._rt(record.notes)},
