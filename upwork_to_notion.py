@@ -191,7 +191,7 @@ class JobRecord:
 
     @property
     def status(self) -> str:
-        return "候補"
+        return "pending"
 
 
 class UpworkParser:
@@ -573,7 +573,7 @@ class NotionClient:
             "Title": {"title": {}},
             "Platform": {"select": {"options": [{"name": "Upwork", "color": "blue"}]}},
             "Status": {"select": {"options": [{"name": x, "color": c} for x, c in [
-                ("未確認", "gray"), ("候補", "blue"), ("応募予定", "yellow"), ("応募済み", "green"), ("見送り", "red")
+                ("pending", "blue"), ("未確認", "gray"), ("候補", "default"), ("応募予定", "yellow"), ("応募済み", "green"), ("見送り", "red")
             ]]}},
             "Budget Type": {"select": {"options": [{"name": "Fixed", "color": "purple"}, {"name": "Hourly", "color": "orange"}]}},
             "Budget": {"rich_text": {}},
@@ -639,10 +639,23 @@ class NotionClient:
         text = text or ""
         if not text:
             return []
+        # Notion validates this limit using UTF-16 code units (surrogate pairs count as 2).
+        # Python's len() counts Unicode code points, so we must chunk by UTF-16 length.
         out: List[Dict[str, Any]] = []
-        step = self._NOTION_RICH_TEXT_MAX
-        for i in range(0, len(text), step):
-            out.append({"type": "text", "text": {"content": text[i : i + step]}})
+        max_units = self._NOTION_RICH_TEXT_MAX
+
+        start = 0
+        current_units = 0
+        for i, ch in enumerate(text):
+            units = 2 if ord(ch) > 0xFFFF else 1
+            if current_units + units > max_units:
+                out.append({"type": "text", "text": {"content": text[start:i]}})
+                start = i
+                current_units = 0
+            current_units += units
+
+        if start < len(text):
+            out.append({"type": "text", "text": {"content": text[start:]}})
         return out
 
     def _record_to_properties(self, record: JobRecord) -> Dict[str, Any]:
@@ -776,19 +789,19 @@ def main() -> None:
 
     created = 0
     updated = 0
+    skipped = 0
     for job in jobs:
         existing = notion.query_data_source_by_job_uid(data_source_id, job.job_uid)
         if existing:
-            notion.update_page(existing["id"], job)
-            updated += 1
-            print(f"Updated: {job.title}")
+            skipped += 1
+            print(f"Skipped (already exists): {job.title}")
         else:
             notion.create_page(data_source_id, job)
             created += 1
             print(f"Created: {job.title}")
         time.sleep(0.25)
 
-    print(f"Done. created={created}, updated={updated}, data_source_id={data_source_id}")
+    print(f"Done. created={created}, updated={updated}, skipped={skipped}, data_source_id={data_source_id}")
 
 
 if __name__ == "__main__":
